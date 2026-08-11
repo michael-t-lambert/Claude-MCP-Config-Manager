@@ -82,6 +82,36 @@ def _set_windows_app_id() -> None:
     except Exception:
         pass
 
+# Held for the process lifetime so the mutex stays owned until exit.
+_INSTANCE_MUTEX = None
+
+def _acquire_single_instance() -> bool:
+    """True if this is the only instance; False if one is already running."""
+    if _sys.platform != "win32":
+        return True
+    global _INSTANCE_MUTEX
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        _INSTANCE_MUTEX = k.CreateMutexW(None, False, "Local\\" + APP_ID)
+        ERROR_ALREADY_EXISTS = 183
+        return k.GetLastError() != ERROR_ALREADY_EXISTS
+    except Exception:
+        return True  # never block startup on a guard failure
+
+def _focus_existing_window() -> None:
+    if _sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        hwnd = u.FindWindowW(None, APP_NAME)
+        if hwnd:
+            u.ShowWindow(hwnd, 9)          # SW_RESTORE
+            u.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
 def _write_text_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -137,6 +167,16 @@ def load_library() -> tuple[dict, dict, str | None]:
                 else:
                     preserved_enabled = extensions[eid].get("enabled", ext.get("enabled", True))
                     extensions[eid] = {**ext, "enabled": preserved_enabled}
+            # Drop library extensions that were uninstalled (folder gone from disk).
+            # Guarded on EXT_DIR existing so a missing Claude dir never mass-prunes.
+            if EXT_DIR.exists():
+                for eid in list(extensions):
+                    if eid in discovered:
+                        continue
+                    folder = extensions[eid].get("folder")
+                    folder_path = Path(folder) if folder else (EXT_DIR / eid)
+                    if not folder_path.exists():
+                        del extensions[eid]
             new_servers = _discover_live_servers(servers)
             if new_servers:
                 servers.update(new_servers)
@@ -1139,5 +1179,8 @@ class UpgradeProgressDialog(ctk.CTkToplevel):
 
 if __name__ == "__main__":
     _set_windows_app_id()
+    if not _acquire_single_instance():
+        _focus_existing_window()   # bring the running copy forward instead of clashing
+        _sys.exit(0)
     app = App()
     app.mainloop()
