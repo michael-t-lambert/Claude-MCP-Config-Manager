@@ -1,8 +1,13 @@
 # Claude MCP Config Manager
 
 A Windows desktop app for managing MCP servers and Claude Desktop Extensions in one place. Toggle servers on and off, add new ones, edit configurations, and apply changes — without hand-editing JSON files. I created this so that only the MCP servers required for a specific task are loaded, reducing the load on context and token burn by having unnecessary MCP servers loaded. YMMV.
+
 ![Main interface](assets/screenshot-main.png)
-![Edit MCP](assets/screenshot-edit.png)
+
+![Add MCP](assets/screenshot-add.png)
+
+![Edit MCP JSON](assets/screenshot-edit.png)
+
 ## What It Does
 
 Claude Desktop uses `claude_desktop_config.json` to know which MCP servers to load. Editing that file by hand is tedious and error-prone. This app gives you a visual toggle interface and maintains its own library (`mcp_library.json`) as the source of truth.
