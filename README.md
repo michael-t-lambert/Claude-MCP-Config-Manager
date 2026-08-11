@@ -101,11 +101,48 @@ Copy-Item claude_desktop_config.20250528-143022.bak.json claude_desktop_config.j
 
 Then restart Claude Desktop.
 
+## Checking for Updates
+
+Click **⟳ Check for Updates** (top-right) to scan every MCP server you have configured — across the manager's own library, Claude Desktop's `claude_desktop_config.json`, Claude Code's `~/.claude.json`, and installed DXT extensions — in one de-duplicated list. The scan is **read-only**: it never changes anything.
+
+Each server is classified by how it is installed, and checked against the right source:
+
+| Type | How it's checked | Upgradable here? |
+|------|------------------|------------------|
+| **Local git checkout** (venv or system Python running a cloned repo) | `git fetch` + commits-behind vs the upstream branch | **Yes** |
+| **pip module** (`python -m <module>`) | installed version vs PyPI | **Yes — only when in a virtual-env** |
+| **Floating `npx -y` / `uvx`** | latest on npm / PyPI (informational) | No — these already pull the newest version at every launch |
+| **DXT extension** | pinned version vs the GitHub release (registry extensions) | No — update via Claude Desktop's extension manager |
+| **Native `.exe` / node launcher** | — | No — updated by their parent app |
+
+### Guided upgrades (git checkouts and venv pip modules)
+
+For the two revertible types, an **Upgrade** button runs a deliberately conservative sequence, and **only after you confirm**:
+
+1. **Guard** — a git checkout with uncommitted changes, or one that isn't a clean fast-forward, is refused. Nothing is touched.
+2. **Full backup** — the repo folder is copied to `<repo>-backup-<timestamp>`, and a `pip freeze` snapshot of the server's interpreter is saved, **before** any change.
+3. **Apply** — `git pull --ff-only` (never a merge or rebase), then `pip install -r requirements.txt` into the venv if present.
+4. **Smoke test** — the server is launched briefly to confirm it still starts (PASS / FAIL / INCONCLUSIVE). A failing smoke test **never** auto-reverts — it just surfaces the one-click **Revert** button.
+5. **Document** — an upgrade + revert record is written to `mcp-upgrades\<name>-<timestamp>.md` (whether the upgrade succeeded or not), containing the old→new commit/version, the backup and snapshot paths, and the **exact PowerShell commands to roll back**.
+
+### Reverting an upgrade
+
+Use the **Revert** button in the upgrade window (it restores the old commit and reinstalls the snapshotted dependencies), or run the commands from the generated `mcp-upgrades\*.md` document by hand. The full folder backup is kept as a last resort.
+
+### Safety guarantees
+
+- Report-only by default; no server is modified without a per-server confirmation.
+- Floating (`npx`/`uvx`), DXT extensions, binaries, and node launchers are **never** modified — only reported.
+- pip modules installed in the **shared system Python** are reported but **not** auto-upgraded, to avoid breaking other tools that pin conflicting dependency versions (isolate them in a virtual-env first).
+- Secrets in `env` (tokens, passwords, API keys) are **redacted everywhere** — in the list, the logs, and the generated documents.
+
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `mcp_manager.py` | Application source |
+| `mcp_updater.py` | Update-scan + guided-upgrade engine (used by the manager; also runnable standalone: `python mcp_updater.py`) |
+| `mcp-upgrades/` | Auto-generated per-upgrade documentation and dependency snapshots (gitignored) |
 | `mcp_library.json` | Your server and extension library (created on first run) |
 | `manager_prefs.json` | UI preferences: window position, close/reopen toggles |
 | `Claude MCP Config Manager.spec` | PyInstaller build configuration |

@@ -21,6 +21,8 @@ from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox
 
+import mcp_updater
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 import sys as _sys
@@ -365,6 +367,9 @@ class App(ctk.CTk):
                      text_color="white").pack(side="left")
         self.hdr_status = ctk.CTkLabel(hdr, text="", font=ctk.CTkFont(size=12), text_color="#6b7280")
         self.hdr_status.pack(side="right", padx=16)
+        ctk.CTkButton(hdr, text="⟳  Check for Updates", width=170, height=30,
+                      font=ctk.CTkFont(size=12), fg_color=TEAL, hover_color=TEAL_HOV,
+                      command=self._check_updates).pack(side="right", padx=(0, 8), pady=14)
 
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True)
@@ -666,6 +671,10 @@ class App(ctk.CTk):
         self.prefs["reopen_claude_on_apply"] = self.reopen_var.get()
         save_prefs(self.prefs)
 
+    def _check_updates(self) -> None:
+        # scan reflects the current (possibly unsaved) library the user is looking at
+        UpdatesDialog(self, dict(self.servers), dict(self.extensions))
+
     def _apply(self) -> None:
         if self.busy:
             return
@@ -874,6 +883,257 @@ class EditDialog(ctk.CTkToplevel):
             return
         self.callback(json.loads(self.editor.get("1.0", "end")))
         self.destroy()
+
+# ─── Updates Dialog ───────────────────────────────────────────────────────────
+
+_STATE_STYLE = {
+    mcp_updater.UP_TO_DATE:   ("up to date",   "#14532d", "#86efac"),
+    mcp_updater.BEHIND:       ("behind",       "#78350f", "#fbbf24"),
+    mcp_updater.FLOATING:     ("floating",     "#0c4a6e", "#7dd3fc"),
+    mcp_updater.SELF_MANAGED: ("self-managed", "#292929", "#9ca3af"),
+    mcp_updater.ERROR:        ("error",        "#450a0a", "#fca5a5"),
+}
+
+
+class UpdatesDialog(ctk.CTkToplevel):
+    def __init__(self, parent, servers: dict, extensions: dict):
+        super().__init__(parent)
+        self.servers    = servers
+        self.extensions = extensions
+        self.title("MCP Updates")
+        self.geometry("860x620")
+        self.minsize(720, 480)
+        self.configure(fg_color=BG_DARK)
+        self.grab_set()
+        self.after(60, self.lift)
+
+        hdr = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=52)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(hdr, text="MCP Server Updates", font=ctk.CTkFont(size=15, weight="bold"),
+                     text_color="white").pack(side="left", padx=16)
+        self.rescan_btn = ctk.CTkButton(hdr, text="Rescan", width=90, height=30,
+            font=ctk.CTkFont(size=12), fg_color="#1f2937", hover_color="#374151",
+            command=self._start_scan)
+        self.rescan_btn.pack(side="right", padx=16, pady=11)
+        self.summary = ctk.CTkLabel(hdr, text="", font=ctk.CTkFont(size=12), text_color="#9ca3af")
+        self.summary.pack(side="right", padx=(0, 8))
+
+        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent",
+            scrollbar_button_color="#374151", scrollbar_button_hover_color="#4b5563")
+        self.body.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self._start_scan()
+
+    def _start_scan(self) -> None:
+        self.rescan_btn.configure(state="disabled")
+        self.summary.configure(text="scanning…")
+        for w in self.body.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self.body,
+            text="Scanning all configs…\n(git fetch + npm/PyPI/GitHub version checks — may take a moment)",
+            font=ctk.CTkFont(size=13), text_color="#6b7280", justify="left").pack(anchor="w", padx=14, pady=18)
+
+        def worker() -> None:
+            try:
+                refs = mcp_updater.collect_all_servers(self.servers, self.extensions)
+                results = [(r, mcp_updater.check_update(r)) for r in refs]
+            except Exception as exc:  # noqa: BLE001
+                results = None
+                err = str(exc)
+                self.after(0, lambda: self._scan_failed(err))
+                return
+            self.after(0, lambda: self._render(results))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _scan_failed(self, err: str) -> None:
+        for w in self.body.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self.body, text=f"Scan failed:\n{err}", text_color="#ef4444",
+                     font=ctk.CTkFont(size=12), justify="left").pack(anchor="w", padx=14, pady=18)
+        self.rescan_btn.configure(state="normal")
+        self.summary.configure(text="error")
+
+    def _render(self, results: list) -> None:
+        for w in self.body.winfo_children():
+            w.destroy()
+        order = {mcp_updater.BEHIND: 0, mcp_updater.ERROR: 1, mcp_updater.FLOATING: 2,
+                 mcp_updater.UP_TO_DATE: 3, mcp_updater.SELF_MANAGED: 4}
+        results.sort(key=lambda rs: (0 if rs[1].upgradable else 1,
+                                     order.get(rs[1].state, 9), rs[0].display.lower()))
+        upgradable = 0
+        for ref, st in results:
+            if st.upgradable:
+                upgradable += 1
+            self._row(ref, st)
+        self.summary.configure(text=f"{len(results)} servers  ·  {upgradable} upgradable")
+        self.rescan_btn.configure(state="normal")
+
+    def _row(self, ref, st) -> None:
+        card = ctk.CTkFrame(self.body, fg_color=BG_CARD, corner_radius=10)
+        card.pack(fill="x", padx=6, pady=4)
+
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(10, 2))
+        ctk.CTkLabel(top, text=ref.display, font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#f3f4f6").pack(side="left")
+        ctk.CTkLabel(top, text=f"  {ref.kind}  ", font=ctk.CTkFont(size=10),
+                     fg_color="#1e1e3a", text_color="#a5b4fc", corner_radius=5).pack(side="left", padx=(8, 0))
+
+        label, bg, fg = _STATE_STYLE.get(st.state, ("?", "#292929", "#9ca3af"))
+        ctk.CTkLabel(top, text=f"  {label}  ", font=ctk.CTkFont(size=11),
+                     fg_color=bg, text_color=fg, corner_radius=6).pack(side="right")
+
+        if st.upgradable:
+            ctk.CTkButton(top, text="Upgrade", width=90, height=28,
+                font=ctk.CTkFont(size=12, weight="bold"), fg_color=INDIGO, hover_color=INDIGO_HOV,
+                command=lambda r=ref, s=st: self._confirm_upgrade(r, s)).pack(side="right", padx=8)
+
+        info = ctk.CTkFrame(card, fg_color="transparent")
+        info.pack(fill="x", padx=14, pady=(0, 10))
+        ver = f"current  {st.current}      →      latest  {st.latest}"
+        ctk.CTkLabel(info, text=ver, font=ctk.CTkFont(size=12, family="Consolas"),
+                     text_color="#c9cdd3", anchor="w").pack(fill="x")
+        origins = ", ".join(ref.origins)
+        meta = f"{origins}"
+        if st.detail:
+            meta += f"   ·   {st.detail}"
+        ctk.CTkLabel(info, text=meta, font=ctk.CTkFont(size=11), text_color="#6b7280",
+                     anchor="w", justify="left", wraplength=780).pack(fill="x", pady=(2, 0))
+
+    def _confirm_upgrade(self, ref, st) -> None:
+        if ref.kind == mcp_updater.GIT:
+            steps = (f"  • Full backup of the repo folder + pip-freeze snapshot\n"
+                     f"  • git pull --ff-only  ({st.behind_count} commit(s))\n"
+                     f"  • Reinstall requirements.txt into the venv (if present)\n"
+                     f"  • Smoke-test the server\n"
+                     f"  • Write an upgrade + revert document")
+            where = f"Project: {ref.project_dir}"
+        else:
+            steps = (f"  • pip-freeze snapshot of the venv\n"
+                     f"  • pip install -U  ({st.current} → {st.latest})\n"
+                     f"  • Smoke-test the server\n"
+                     f"  • Write an upgrade + revert document")
+            where = f"Interpreter: {ref.interpreter}"
+        msg = (f'Upgrade "{ref.display}"?\n\n{where}\n\nThis will:\n{steps}\n\n'
+               "A full backup and dependency snapshot are taken BEFORE any change, "
+               "so you can revert with one click if the smoke test fails.")
+        if messagebox.askyesno("Confirm Upgrade", msg, parent=self):
+            UpgradeProgressDialog(self, ref, st, on_done=self._start_scan)
+
+
+class UpgradeProgressDialog(ctk.CTkToplevel):
+    def __init__(self, parent, ref, status, on_done=None):
+        super().__init__(parent)
+        self.ref     = ref
+        self.status  = status
+        self.on_done = on_done
+        self.result  = None
+        self.title(f"Upgrading — {ref.display}")
+        self.geometry("720x540")
+        self.configure(fg_color=BG_CARD)
+        self.grab_set()
+        self.after(60, self.lift)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+        ctk.CTkLabel(self, text=f"Upgrading {ref.display}", font=ctk.CTkFont(size=15, weight="bold"),
+                     text_color="white").pack(anchor="w", padx=20, pady=(18, 2))
+        self.head = ctk.CTkLabel(self, text="Working… do not close.", font=ctk.CTkFont(size=12),
+                                 text_color="#9ca3af")
+        self.head.pack(anchor="w", padx=20, pady=(0, 8))
+
+        self.log = ctk.CTkTextbox(self, font=ctk.CTkFont(size=11, family="Consolas"),
+                                  fg_color="#0d1117", border_color="#374151", border_width=1)
+        self.log.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+        self.log.configure(state="disabled")
+
+        self.btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_row.pack(fill="x", padx=20, pady=(0, 18))
+        self.close_btn = ctk.CTkButton(self.btn_row, text="Close", width=90, state="disabled",
+            fg_color="#1f2937", hover_color="#374151", command=self._close)
+        self.close_btn.pack(side="right")
+        self.doc_btn = None
+        self.revert_btn = None
+
+        self._run()
+
+    def _append(self, msg: str) -> None:
+        self.log.configure(state="normal")
+        self.log.insert("end", msg + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def _run(self) -> None:
+        def worker() -> None:
+            res = mcp_updater.upgrade(
+                self.ref, self.status,
+                on_progress=lambda m: self.after(0, lambda: self._append(m)))
+            self.after(0, lambda: self._finish(res))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish(self, res) -> None:
+        self.result = res
+        self.close_btn.configure(state="normal")
+        if res.ok and res.smoke == "PASS":
+            self.head.configure(text=f"✓  Upgrade complete — smoke test PASSED  ({res.old_ref[:10]} → {res.new_ref[:10]})",
+                                text_color="#22c55e")
+        elif res.ok:
+            self.head.configure(text=f"Upgrade applied — smoke test {res.smoke}. Review the log; revert if needed.",
+                                text_color="#f59e0b")
+        else:
+            self.head.configure(text="✗  Upgrade did not complete cleanly. Revert available below.",
+                                text_color="#ef4444")
+
+        if res.doc_path:
+            self.doc_btn = ctk.CTkButton(self.btn_row, text="Open Document", width=130,
+                fg_color="#1f2937", hover_color="#374151",
+                command=lambda p=res.doc_path: self._open_doc(p))
+            self.doc_btn.pack(side="left")
+
+        if res.revert_record:
+            danger = (not res.ok) or res.smoke in ("FAIL", "INCONCLUSIVE")
+            self.revert_btn = ctk.CTkButton(self.btn_row, text="Revert", width=110,
+                fg_color="#7f1d1d" if danger else "#1f2937",
+                hover_color="#991b1b" if danger else "#374151",
+                text_color="#fca5a5" if danger else "#d1d5db",
+                command=self._revert)
+            self.revert_btn.pack(side="right", padx=(0, 8))
+
+    def _open_doc(self, path) -> None:
+        try:
+            os.startfile(str(path))  # noqa: S606 — Windows, user-initiated
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showinfo("Document", f"Saved at:\n{path}\n\n({exc})", parent=self)
+
+    def _revert(self) -> None:
+        if not messagebox.askyesno("Confirm Revert",
+            f'Roll "{self.ref.display}" back to its pre-upgrade state?', parent=self, icon="warning"):
+            return
+        self.revert_btn.configure(state="disabled")
+        self.close_btn.configure(state="disabled")
+        self._append("\n── REVERT ──")
+
+        def worker() -> None:
+            ok, log = mcp_updater.revert(
+                self.result.revert_record,
+                on_progress=lambda m: self.after(0, lambda: self._append(m)))
+            self.after(0, lambda: self._revert_done(ok))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _revert_done(self, ok: bool) -> None:
+        self.close_btn.configure(state="normal")
+        self.head.configure(text="Reverted to pre-upgrade state." if ok else "Revert failed — see log.",
+                            text_color="#22c55e" if ok else "#ef4444")
+
+    def _close(self) -> None:
+        self.destroy()
+        if self.on_done:
+            try:
+                self.on_done()
+            except Exception:  # noqa: BLE001
+                pass
+
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
