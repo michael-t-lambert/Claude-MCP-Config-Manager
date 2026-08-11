@@ -6,5 +6,6 @@ dist/
 manager_prefs.json
 mcp_library.json
 *.bak
+*.bak.json
 mockup.html
 mcp-upgrades/
