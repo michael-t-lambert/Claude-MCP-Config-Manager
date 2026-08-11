@@ -8,7 +8,8 @@ A Windows desktop app for managing MCP servers and Claude Desktop Extensions in 
 Claude Desktop uses `claude_desktop_config.json` to know which MCP servers to load. Editing that file by hand is tedious and error-prone. This app gives you a visual toggle interface and maintains its own library (`mcp_library.json`) as the source of truth.
 
 - **MCP Servers**: Add, remove, enable/disable, and edit server configurations. On Apply, only enabled servers are written to Claude Desktop's config.
-- **Extensions**: Automatically discovers installed Claude Desktop Extensions and lets you enable or disable them.
+- **Extensions**: Automatically discovers installed Claude Desktop Extensions and lets you enable or disable them. Extensions uninstalled from Claude Desktop are automatically dropped from the list.
+- **Update scanning**: Scan every configured MCP server for available updates and run conservative, fully-reversible upgrades on the ones that support it (see [Checking for Updates](#checking-for-updates)).
 - **Restart Integration**: Optionally closes and reopens Claude Desktop after applying, so changes take effect immediately.
 
 ## Installation
@@ -85,6 +86,7 @@ A new backup is created on every Apply, so you always have a history of previous
 - **Atomic writes**: Config files are written to a temp file first, then moved into place. A crash mid-write won't corrupt your config.
 - **Non-destructive merges**: The app only replaces the `mcpServers` section. All other top-level keys in `claude_desktop_config.json` (like `globalShortcut`, `allowedDirectories`, etc.) are preserved.
 - **Unsaved changes warning**: If you close the app with unapplied changes, it will prompt you before exiting.
+- **Single instance**: Launching a second copy focuses the window that's already open instead of starting a clashing duplicate that could overwrite the library.
 - **Separate library file**: The app's own `mcp_library.json` is independent of Claude Desktop's config. Even if Claude Desktop's config is reset or corrupted, your server library remains intact.
 
 ### Restoring a backup
@@ -143,6 +145,7 @@ Use the **Revert** button in the upgrade window (it restores the old commit and 
 | `mcp_manager.py` | Application source |
 | `mcp_updater.py` | Update-scan + guided-upgrade engine (used by the manager; also runnable standalone: `python mcp_updater.py`) |
 | `mcp-upgrades/` | Auto-generated per-upgrade documentation and dependency snapshots (gitignored) |
+| `Documentation.md` | Developer/technical documentation — architecture, data model, update-engine internals |
 | `mcp_library.json` | Your server and extension library (created on first run) |
 | `manager_prefs.json` | UI preferences: window position, close/reopen toggles |
 | `Claude MCP Config Manager.spec` | PyInstaller build configuration |
@@ -164,6 +167,8 @@ The exe is created at `dist\Claude MCP Config Manager.exe`.
 - No admin privileges required
 
 ## How It Works (Technical)
+
+> For architecture, the data model, and the update-engine internals, see [Documentation.md](Documentation.md).
 
 The app maintains two separate data stores:
 
