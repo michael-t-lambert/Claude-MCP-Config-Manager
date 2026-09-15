@@ -27,6 +27,7 @@ import mcp_updater
 
 import sys as _sys
 APP_NAME     = "Claude MCP Config Manager"
+APP_VERSION  = "1.0.0"   # bump on each release
 APP_ID       = "com.mtlam.claude-mcp-config-manager"
 SCRIPT_DIR   = Path(_sys.executable).parent if getattr(_sys, 'frozen', False) else Path(__file__).parent
 RESOURCE_DIR = Path(getattr(_sys, "_MEIPASS", SCRIPT_DIR))
@@ -38,6 +39,15 @@ CLAUDE_CFG   = CLAUDE_DIR / "claude_desktop_config.json"
 EXT_DIR      = CLAUDE_DIR / "Claude Extensions"
 EXT_INSTALL  = CLAUDE_DIR / "extensions-installations.json"
 EXT_SETTINGS = CLAUDE_DIR / "Claude Extensions Settings"
+
+
+def _build_date() -> str:
+    """Build date = mtime of the frozen exe, else of this source file."""
+    try:
+        target = Path(_sys.executable) if getattr(_sys, "frozen", False) else Path(__file__)
+        return datetime.fromtimestamp(target.stat().st_mtime).strftime("%Y-%m-%d")
+    except Exception:
+        return "unknown"
 
 
 # Windows Store app ID — stable across version updates
@@ -405,6 +415,8 @@ class App(ctk.CTk):
         ctk.CTkLabel(hdr, text=APP_NAME,
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color="white").pack(side="left")
+        ctk.CTkLabel(hdr, text=f"v{APP_VERSION}  ·  built {_build_date()}",
+                     font=ctk.CTkFont(size=11), text_color="#6b7280").pack(side="left", padx=(10, 2), pady=(4, 0))
         self.hdr_status = ctk.CTkLabel(hdr, text="", font=ctk.CTkFont(size=12), text_color="#6b7280")
         self.hdr_status.pack(side="right", padx=16)
         ctk.CTkButton(hdr, text="⟳  Check for Updates", width=170, height=30,
