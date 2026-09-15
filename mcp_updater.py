@@ -545,6 +545,17 @@ def _check_floating_pypi(ref: ServerRef) -> UpdateStatus:
     )
 
 
+def _github_latest_tag(rec: dict) -> str | None:
+    """Newest GitHub release tag for a DXT's source repo, or None. Informational only."""
+    repo = rec.get("manifest", {}).get("repository", {}).get("url", "")
+    if "github.com" not in repo:
+        return None
+    slug = repo.split("github.com/")[-1].strip("/").removesuffix(".git")
+    gj = _http_json(f"https://api.github.com/repos/{slug}/releases/latest")
+    tag = (gj or {}).get("tag_name") if gj else None
+    return str(tag).lstrip("v") if tag else None
+
+
 def _check_dxt(ref: ServerRef) -> UpdateStatus:
     rec = ref.ext_record or {}
     current = rec.get("version", "?")
@@ -552,16 +563,18 @@ def _check_dxt(ref: ServerRef) -> UpdateStatus:
     if source != "registry":
         return UpdateStatus(SELF_MANAGED, current, "-",
                             "locally-installed DXT extension; no registry upstream")
-    repo = rec.get("manifest", {}).get("repository", {}).get("url", "")
-    latest = "?"
-    if "github.com" in repo:
-        slug = repo.split("github.com/")[-1].strip("/").removesuffix(".git")
-        gj = _http_json(f"https://api.github.com/repos/{slug}/releases/latest")
-        if gj:
-            latest = str(gj.get("tag_name", "?")).lstrip("v")
-    detail = "DXT extension — update through Claude Desktop's extension manager"
-    state = BEHIND if (latest not in ("?", current) and latest != "-") else SELF_MANAGED
-    return UpdateStatus(state, current, latest, detail)
+    # Registry-sourced DXT: Claude Desktop updates these from the Anthropic extension
+    # directory. That directory has no public version API and is not cached on disk, so
+    # the manager cannot read the version Desktop would actually offer. The directory
+    # also lags a project's own GitHub releases by weeks — a GitHub tag is NOT what
+    # Desktop installs — so DXT is reported self-managed and NEVER flagged "behind".
+    # A newer GitHub tag is surfaced as an informational hint only.
+    detail = "registry DXT — updates managed by Claude Desktop's extension directory"
+    gh = _github_latest_tag(rec)
+    if gh and gh != current:
+        detail += (f"  ·  GitHub upstream v{gh} exists "
+                   "(directory may lag; informational only, not installable here)")
+    return UpdateStatus(SELF_MANAGED, current, "-", detail)
 
 # ─── Guided upgrade (git + venv-pip only) ─────────────────────────────────────
 
