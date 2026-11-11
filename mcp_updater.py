@@ -636,6 +636,44 @@ def _smoke_test(ref: ServerRef, log: list, timeout: int = 10) -> str:
     return "INCONCLUSIVE"
 
 
+def _ensure_pip(interp: str, emit) -> None:
+    """Make sure the venv has pip; bootstrap with ensurepip if it is missing."""
+    try:
+        if _run([interp, "-m", "pip", "--version"], timeout=30).returncode == 0:
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    emit("pip missing from venv — bootstrapping with ensurepip…")
+    try:
+        _run([interp, "-m", "ensurepip", "--upgrade"], timeout=120)
+    except Exception as exc:  # noqa: BLE001
+        emit(f"WARNING: ensurepip failed: {exc}")
+
+
+def _reinstall_deps(interp: str, d: Path, ref: ServerRef, emit) -> None:
+    """Sync the venv to the pulled code. Prefers requirements.txt; otherwise does an
+    editable install of the project (pyproject.toml / setup.py) so declared deps update.
+    Undeclared upstream deps can't be synced this way — the smoke test catches those."""
+    if (d / "requirements.txt").exists():
+        cmd = [interp, "-m", "pip", "install", "-r", str(d / "requirements.txt")]
+        what = "requirements.txt"
+    elif (d / "pyproject.toml").exists() or (d / "setup.py").exists():
+        cmd = [interp, "-m", "pip", "install", "-e", str(d)]
+        what = "project (editable)"
+    else:
+        emit("No requirements.txt or pyproject.toml/setup.py — skipping dep reinstall.")
+        return
+    _ensure_pip(interp, emit)
+    emit(f"Reinstalling deps into the venv ({what})…")
+    try:
+        p = _run(cmd, timeout=600)
+        emit(scrub((p.stdout or "")[-800:], ref.env) or "(pip done)")
+        if p.returncode != 0:
+            emit("WARNING: pip install returned non-zero. See smoke test / revert doc.")
+    except Exception as exc:  # noqa: BLE001
+        emit(f"WARNING: pip install failed: {exc}")
+
+
 def upgrade(ref: ServerRef, status: UpdateStatus, on_progress=None) -> UpgradeResult:
     """Conservative, fully-reversible upgrade. Only GIT (venv) and venv-PIP."""
     log: list[str] = []
@@ -702,17 +740,9 @@ def _upgrade_git(ref: ServerRef, status: UpdateStatus, emit, log) -> UpgradeResu
     _, new_sha, _ = _git(d, "rev-parse", "HEAD")
     emit(f"New HEAD: {new_sha[:10]}")
 
-    # reinstall deps if a venv + requirements.txt exist
-    req = d / "requirements.txt"
-    if interp and ref.is_venv and req.exists():
-        emit("Reinstalling requirements into the venv…")
-        try:
-            p = _run([interp, "-m", "pip", "install", "-r", str(req)], timeout=600)
-            emit(scrub((p.stdout or "")[-800:], ref.env) or "(pip done)")
-            if p.returncode != 0:
-                emit("WARNING: pip install returned non-zero. See smoke test / revert doc.")
-        except Exception as exc:  # noqa: BLE001
-            emit(f"WARNING: pip install failed: {exc}")
+    # reinstall deps into the venv after pull (declared deps may have changed)
+    if interp and ref.is_venv:
+        _reinstall_deps(interp, d, ref, emit)
 
     smoke = _smoke_test(ref, log)
     emit(f"Smoke test: {smoke}")
